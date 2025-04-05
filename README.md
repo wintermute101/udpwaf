@@ -11,7 +11,7 @@ run ```cargo build -r```
 
 Currently it only only reloads python when new client is created.</br>
 If python script is changed when application is running it will affect new clients.</br>
-Clients are dropped if there is no activity for number of seconds, set in tiemout.</br>
+Clients are dropped if there is no activity for number of seconds, set in timeout.</br>
 </br>
 Logger can be configured for trace messages</br>
 run ```RUST_LOG=trace cargo run -r```</br>
