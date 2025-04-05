@@ -10,6 +10,10 @@ use pyo3::PyErr;
 use pyo3::types::PyByteArray;
 use std::ffi::CString;
 use clap::Parser;
+use landlock::{
+    ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus, AccessNet,
+    path_beneath_rules,
+};
 
 #[derive(Error, Debug)]
 pub enum DataStoreError {
@@ -27,6 +31,9 @@ pub enum DataStoreError {
 
     #[error("Addr Parse error {0}")]
     AddrParseError(#[from] std::net::AddrParseError),
+
+    #[error("RulesetError {0}")]
+    RulesetError(#[from] landlock::RulesetError),
 }
 
 #[derive(Debug)]
@@ -135,6 +142,42 @@ struct Args {
     timeout: u32,
 }
 
+fn restrict_thread() -> Result<(), DataStoreError> {
+    let abi = ABI::V5;
+
+    let status = Ruleset::default()
+        .handle_access(AccessNet::from_all(abi))?
+        .create()?
+        .restrict_self()?;
+
+    match status.ruleset {
+        // The FullyEnforced case must be tested by the developer.
+        RulesetStatus::FullyEnforced => info!("Network Fully sandboxed."),
+        RulesetStatus::PartiallyEnforced => warn!("Network Partially sandboxed."),
+        // Users should be warned that they are not protected.
+        RulesetStatus::NotEnforced => warn!("Network Not sandboxed! Please update your kernel."),
+    }
+
+    let path = std::env::current_dir()?;
+
+    let status = Ruleset::default()
+        .handle_access(AccessFs::from_all(abi))?
+        .create()?
+        // Read-only access to /usr, /etc and /dev.
+        .add_rules(path_beneath_rules(&["/usr/lib", "/usr/bin"], AccessFs::from_read(abi)))?
+        // Read-write access to /home and /tmp.
+        .add_rules(path_beneath_rules(path.to_str(), AccessFs::from_all(abi)))?
+        .restrict_self()?;
+    match status.ruleset {
+        // The FullyEnforced case must be tested by the developer.
+        RulesetStatus::FullyEnforced => info!("FS Fully sandboxed."),
+        RulesetStatus::PartiallyEnforced => warn!("FS Partially sandboxed."),
+        // Users should be warned that they are not protected.
+        RulesetStatus::NotEnforced => warn!("FS Not sandboxed! Please update your kernel."),
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(),DataStoreError> {
     Builder::new().filter_level(LevelFilter::Info).parse_default_env().init();
@@ -146,6 +189,8 @@ async fn main() -> Result<(),DataStoreError> {
 
     let forward_addr: SocketAddr = args.forward.parse()?;
     let local_bind: SocketAddr = args.local_bind.parse()?;
+
+    restrict_thread()?;
 
     info!("Starting UDP WAF listening on {}", args.bind);
 

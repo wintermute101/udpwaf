@@ -4,6 +4,9 @@ Acts like proxy with additional optional WAF.</br>
 Calls python script with data and if it returns bytes object it will forward that data,</br>
 if it gets None packet will be dropped.
 
+### Building
+Requires ```python3-dev``` on debian/ubuntu.</br>
+run ```cargo build -r```
 ### Remarks
 
 Currently it only only reloads python when new client is created.</br>
@@ -11,8 +14,12 @@ If python script is changed when application is running it will affect new clien
 Clients are dropped if there is no activity for number of seconds, set in tiemout.</br>
 </br>
 Logger can be configured for trace messages</br>
-run ```RUST_LOG=trace cargo run -r```
-
+run ```RUST_LOG=trace cargo run -r```</br>
+</br>
+Added experimental [landlock](https://landlock.io/). Restrics filesystem usage to current working dir and no TCP.</br>
+Requires kernel 6.10 or later to fully support all ABI restrictions.</br>
+Assumes python is installed in /usr/bin and /usr/lib</br>
+You can get ```Forwarder: Error calling python: PermissionError: [Errno 13] Permission denied``` from python or other errors.
 ### Usage:
 
 ```Usage: udpwaf [OPTIONS]
