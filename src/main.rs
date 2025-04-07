@@ -219,8 +219,9 @@ async fn main() -> Result<(),DataStoreError> {
     });
 
     let fun = fun?;
-
     let mut buf = [0; 1024];
+    let mut last_cleanup = time::Instant::now();
+
     loop {
         let ret = time::timeout(Duration::from_secs(1),r.recv_from(&mut buf)).await;
         let (len, addr) = match ret{
@@ -242,10 +243,27 @@ async fn main() -> Result<(),DataStoreError> {
                         c.close().await?;
                     }
                 }
+                last_cleanup = time::Instant::now();
                 continue;
             }
         };
         trace!("Server: {:?} bytes received from {:?}", len, addr);
+
+        if last_cleanup.elapsed() > Duration::from_secs(1){
+            let inactive_clients: Vec<SocketAddr> = clients
+                .iter()
+                .filter(|(_, c)| !c.is_active())
+                .map(|(a, _)| *a)
+                .collect();
+
+            for a in inactive_clients {
+                warn!("Client {} is not active, removing", a);
+                if let Some(mut c) = clients.remove(&a){
+                    c.close().await?;
+                }
+            }
+            last_cleanup = time::Instant::now();
+        }
 
         match clients.entry(addr){
             std::collections::hash_map::Entry::Occupied(mut entry) => {
