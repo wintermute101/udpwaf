@@ -70,7 +70,7 @@ impl Client {
                         return Ok(());
                     }
                 };
-                if addr.port() == server_addr.port(){
+                if addr.port() == server_addr.port() && addr.ip().is_loopback(){
                     error!("Forwarder: {} received data from {} on server port dropping {}", client_addr, addr, server_addr);
                     continue;
                 }
