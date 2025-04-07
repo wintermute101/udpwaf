@@ -22,12 +22,14 @@ Assumes python is installed in /usr/bin and /usr/lib</br>
 You can get ```Forwarder: Error calling python: PermissionError: [Errno 13] Permission denied``` from python or other errors.
 ### Usage:
 
-```Usage: udpwaf [OPTIONS]
+```
+Usage: udpwaf [OPTIONS]
 
 Options:
-  -b, --bind <BIND>              Server bind address [default: [::]:8080]
-  -f, --forward <FORWARD>        Where to forward messages [default: [::1]:8000]
-  -l, --local-bind <LOCAL_BIND>  Where to listent to for forwarder [default: [::1]:0]
-  -t, --timeout <TIMEOUT>        After this time client connection will be dropped [default: 10]
-  -h, --help                     Print help
-  -V, --version                  Print version
+  -b, --bind <BIND>                    Server bind address [default: [::]:8080]
+  -f, --forward <FORWARD>              Where to forward messages [default: [::1]:8000]
+  -l, --local-bind <LOCAL_BIND>        Where to listent to for forwarder [default: [::1]:0]
+  -t, --timeout <TIMEOUT>              After this time client connection will be dropped [default: 10]
+  -s, --filter-script <FILTER_SCRIPT>  Python script should contain filter function. [default: script.py]
+  -h, --help                           Print help
+  -V, --version                        Print version

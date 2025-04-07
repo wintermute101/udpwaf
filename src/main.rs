@@ -10,9 +10,11 @@ use pyo3::PyErr;
 use pyo3::types::PyByteArray;
 use std::ffi::CString;
 use clap::Parser;
+use std::path::PathBuf;
 use landlock::{
-    ABI, Access, AccessFs, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus, AccessNet,
-    path_beneath_rules,
+    ABI, Access, AccessFs, Ruleset, RulesetAttr,
+    RulesetCreatedAttr, RulesetStatus, AccessNet,
+    make_bitflags, path_beneath_rules,
 };
 
 #[derive(Error, Debug)]
@@ -46,7 +48,7 @@ struct Client{
 }
 
 impl Client {
-    async fn new(forward_addr: SocketAddr, local_bind: SocketAddr, timeout: u32, sender: Sender<(Vec<u8>, SocketAddr)>, client_addr: SocketAddr) -> Result<Self, DataStoreError> {
+    async fn new(forward_addr: SocketAddr, local_bind: SocketAddr, timeout: u32, script_name: &String, sender: Sender<(Vec<u8>, SocketAddr)>, client_addr: SocketAddr) -> Result<Self, DataStoreError> {
         let sock = UdpSocket::bind(local_bind).await?;
         let r = Arc::new(sock);
         let s = r.clone();
@@ -72,11 +74,11 @@ impl Client {
         });
 
         let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
-            let code = std::fs::read_to_string("script.py")?;
+            let code = std::fs::read_to_string(&script_name)?;
             let fun = PyModule::from_code(
                     py,
                     CString::new(code)?.as_c_str(),
-                    c_str!("script.py"),
+                    CString::new(script_name.as_bytes())?.as_c_str(),
                     c_str!("filter"),
                 )?.getattr("filter")?.into();
 
@@ -140,9 +142,12 @@ struct Args {
 
     #[arg(short, long, help="After this time client connection will be dropped", default_value_t = 10)]
     timeout: u32,
+
+    #[arg(short='s', long, help="Python script should contain filter function.", default_value_t = String::from("script.py"))]
+    filter_script: String,
 }
 
-fn restrict_thread() -> Result<(), DataStoreError> {
+fn restrict_thread(path: &PathBuf) -> Result<(), DataStoreError> {
     let abi = ABI::V5;
 
     let status = Ruleset::default()
@@ -158,15 +163,13 @@ fn restrict_thread() -> Result<(), DataStoreError> {
         RulesetStatus::NotEnforced => warn!("Network Not sandboxed! Please update your kernel."),
     }
 
-    let path = std::env::current_dir()?;
-
     let status = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))?
         .create()?
-        // Read-only access to /usr, /etc and /dev.
-        .add_rules(path_beneath_rules(&["/usr/lib", "/usr/bin"], AccessFs::from_read(abi)))?
-        // Read-write access to /home and /tmp.
-        .add_rules(path_beneath_rules(path.to_str(), AccessFs::from_all(abi)))?
+        //can only execute python3 might might not be true on all linux flavors
+        .add_rules(path_beneath_rules(&["/usr/bin/python3"], AccessFs::from_read(abi)))?
+        .add_rules(path_beneath_rules(&["/usr/lib"], make_bitflags!(AccessFs::{ReadFile|ReadDir})))?
+        .add_rules(path_beneath_rules(path, make_bitflags!(AccessFs::ReadFile)))?
         .restrict_self()?;
     match status.ruleset {
         // The FullyEnforced case must be tested by the developer.
@@ -190,7 +193,7 @@ async fn main() -> Result<(),DataStoreError> {
     let forward_addr: SocketAddr = args.forward.parse()?;
     let local_bind: SocketAddr = args.local_bind.parse()?;
 
-    restrict_thread()?;
+    restrict_thread(&PathBuf::from(&args.filter_script))?;
 
     info!("Starting UDP WAF listening on {}", args.bind);
 
@@ -241,13 +244,13 @@ async fn main() -> Result<(),DataStoreError> {
 
                     client.close().await?;
 
-                    *client = Client::new(forward_addr, local_bind, args.timeout, tx.clone(), addr).await?;
+                    *client = Client::new(forward_addr, local_bind, args.timeout, &args.filter_script, tx.clone(), addr).await?;
                     client.forward(buf[..len].to_vec()).await?;
                 }
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 info!("New client: {:?}", addr);
-                let client = Client::new(forward_addr, local_bind, args.timeout, tx.clone(), addr).await?;
+                let client = Client::new(forward_addr, local_bind, args.timeout, &args.filter_script, tx.clone(), addr).await?;
                 client.forward(buf[..len].to_vec()).await?;
                 entry.insert(client);
             }
