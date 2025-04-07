@@ -11,6 +11,7 @@ use pyo3::types::PyByteArray;
 use std::ffi::CString;
 use clap::Parser;
 use std::path::PathBuf;
+use rlimit::{getrlimit, Resource};
 use landlock::{
     ABI, Access, AccessFs, Ruleset, RulesetAttr,
     RulesetCreatedAttr, RulesetStatus, AccessNet,
@@ -48,7 +49,7 @@ struct Client{
 }
 
 impl Client {
-    async fn new(forward_addr: SocketAddr, local_bind: SocketAddr, timeout: u32, script_name: &String, sender: Sender<(Vec<u8>, SocketAddr)>, client_addr: SocketAddr) -> Result<Self, DataStoreError> {
+    async fn new(forward_addr: SocketAddr, local_bind: SocketAddr, timeout: u32, script: Py<PyAny>, sender: Sender<(Vec<u8>, SocketAddr)>, client_addr: SocketAddr) -> Result<Self, DataStoreError> {
         let sock = UdpSocket::bind(local_bind).await?;
         let r = Arc::new(sock);
         let s = r.clone();
@@ -73,19 +74,7 @@ impl Client {
             }
         });
 
-        let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
-            let code = std::fs::read_to_string(script_name)?;
-            let fun = PyModule::from_code(
-                    py,
-                    CString::new(code)?.as_c_str(),
-                    CString::new(script_name.as_bytes())?.as_c_str(),
-                    c_str!("filter"),
-                )?.getattr("filter")?.into();
-
-            Ok(fun)
-        });
-
-        Ok(Client { forward_addr, sock: s, client_addr, client_handle: Some(h), py: fun? })
+        Ok(Client { forward_addr, sock: s, client_addr, client_handle: Some(h), py: script })
     }
 
     fn is_active(&self) -> bool {
@@ -197,6 +186,17 @@ async fn main() -> Result<(),DataStoreError> {
 
     info!("Starting UDP WAF listening on {}", args.bind);
 
+    let limits = getrlimit(Resource::NOFILE)?;
+    info!("Current file open limits: {:?}", limits);
+
+    if limits.0 < 50000{
+        let minlimit = std::cmp::min(50000, limits.1);
+        warn!("Current file open limits too low trying to increase to {}", minlimit);
+        rlimit::setrlimit(Resource::NOFILE, minlimit, limits.1)?;
+        let limits = getrlimit(Resource::NOFILE)?;
+        info!("Current file open limits: {:?}", limits);
+    }
+
     tokio::spawn(async move {
         while let Some((bytes, addr)) = rx.recv().await {
             let len = s.send_to(&bytes, &addr).await.unwrap();
@@ -205,6 +205,20 @@ async fn main() -> Result<(),DataStoreError> {
     });
 
     let mut clients: HashMap<SocketAddr, Client> = HashMap::new();
+
+    let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
+        let code = std::fs::read_to_string(&args.filter_script)?;
+        let fun = PyModule::from_code(
+                py,
+                CString::new(code)?.as_c_str(),
+                CString::new(args.filter_script.as_bytes())?.as_c_str(),
+                c_str!("filter"),
+            )?.getattr("filter")?.into();
+
+        Ok(fun)
+    });
+
+    let fun = fun?;
 
     let mut buf = [0; 1024];
     loop {
@@ -244,13 +258,23 @@ async fn main() -> Result<(),DataStoreError> {
 
                     client.close().await?;
 
-                    *client = Client::new(forward_addr, local_bind, args.timeout, &args.filter_script, tx.clone(), addr).await?;
+                    let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
+                        Ok(fun.clone_ref(py))
+                    });
+                    let fun = fun?;
+
+                    *client = Client::new(forward_addr, local_bind, args.timeout, fun, tx.clone(), addr).await?;
                     client.forward(buf[..len].to_vec()).await?;
                 }
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
                 info!("New client: {:?}", addr);
-                let client = Client::new(forward_addr, local_bind, args.timeout, &args.filter_script, tx.clone(), addr).await?;
+                let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
+                        Ok(fun.clone_ref(py))
+                });
+                let fun = fun?;
+
+                let client = Client::new(forward_addr, local_bind, args.timeout, fun, tx.clone(), addr).await?;
                 client.forward(buf[..len].to_vec()).await?;
                 entry.insert(client);
             }

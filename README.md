@@ -9,8 +9,11 @@ Requires ```python3-dev``` on debian/ubuntu.</br>
 run ```cargo build -r```
 ### Remarks
 
-Currently it only only reloads python when new client is created.</br>
-If python script is changed when application is running it will affect new clients.</br>
+Currently script is open at aplication start.</br>
+If python script is changed when application is running it will not affect until aplication restart.</br>
+Added supprt to change number of descriptors open limits.</br>
+Under stress testing default 1024 is hit very fast.</br>
+If you get error for too many open files open change hard limit to more than 30k</br>
 Clients are dropped if there is no activity for number of seconds, set in timeout.</br>
 </br>
 Logger can be configured for trace messages</br>

@@ -9,5 +9,6 @@ env_logger = "0.11.8"
 landlock = "0.4.1"
 log = "0.4.27"
 pyo3 = {version="0.24.1", features=["auto-initialize"]}
+rlimit = "0.10.2"
 thiserror = "2.0.12"
 tokio = { version = "1.44.2", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
