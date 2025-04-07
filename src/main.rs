@@ -74,7 +74,7 @@ impl Client {
         });
 
         let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
-            let code = std::fs::read_to_string(&script_name)?;
+            let code = std::fs::read_to_string(script_name)?;
             let fun = PyModule::from_code(
                     py,
                     CString::new(code)?.as_c_str(),
