@@ -49,8 +49,9 @@ struct Client{
 }
 
 impl Client {
-    async fn new(forward_addr: SocketAddr, local_bind: SocketAddr, timeout: u32, script: Py<PyAny>, sender: Sender<(Vec<u8>, SocketAddr)>, client_addr: SocketAddr) -> Result<Self, DataStoreError> {
+    async fn new(forward_addr: SocketAddr, local_bind: SocketAddr, timeout: u32, script: Py<PyAny>, server_addr: SocketAddr, sender: Sender<(Vec<u8>, SocketAddr)>, client_addr: SocketAddr) -> Result<Self, DataStoreError> {
         let sock = UdpSocket::bind(local_bind).await?;
+
         let r = Arc::new(sock);
         let s = r.clone();
 
@@ -69,6 +70,10 @@ impl Client {
                         return Ok(());
                     }
                 };
+                if addr.port() == server_addr.port(){
+                    error!("Forwarder: {} received data from {} on server port dropping {}", client_addr, addr, server_addr);
+                    continue;
+                }
                 trace!("Forwarder: {} bytes received from {} forwarding to {}", len, addr, client_addr);
                 sender.send((buf[..len].to_vec(), client_addr)).await.unwrap();
             }
@@ -174,13 +179,18 @@ fn restrict_thread(path: &PathBuf) -> Result<(), DataStoreError> {
 async fn main() -> Result<(),DataStoreError> {
     Builder::new().filter_level(LevelFilter::Info).parse_default_env().init();
     let args = Args::parse();
-    let sock = UdpSocket::bind(args.bind.parse::<SocketAddr>()?).await?;
+    let server_addr = args.bind.parse::<SocketAddr>()?;
+    let sock = UdpSocket::bind(server_addr).await?;
     let r = Arc::new(sock);
     let s = r.clone();
     let (tx, mut rx) = mpsc::channel::<(Vec<u8>, SocketAddr)>(1_000);
 
     let forward_addr: SocketAddr = args.forward.parse()?;
-    let local_bind: SocketAddr = args.local_bind.parse()?;
+    let local_bind: SocketAddr = {
+        let mut bind: SocketAddr = args.local_bind.parse()?;
+        bind.set_port(0);
+        bind
+    };
 
     restrict_thread(&PathBuf::from(&args.filter_script))?;
 
@@ -281,7 +291,7 @@ async fn main() -> Result<(),DataStoreError> {
                     });
                     let fun = fun?;
 
-                    *client = Client::new(forward_addr, local_bind, args.timeout, fun, tx.clone(), addr).await?;
+                    *client = Client::new(forward_addr, local_bind, args.timeout, fun, server_addr, tx.clone(), addr).await?;
                     client.forward(buf[..len].to_vec()).await?;
                 }
             }
@@ -292,7 +302,7 @@ async fn main() -> Result<(),DataStoreError> {
                 });
                 let fun = fun?;
 
-                let client = Client::new(forward_addr, local_bind, args.timeout, fun, tx.clone(), addr).await?;
+                let client = Client::new(forward_addr, local_bind, args.timeout, fun, server_addr, tx.clone(), addr).await?;
                 client.forward(buf[..len].to_vec()).await?;
                 entry.insert(client);
             }
