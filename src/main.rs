@@ -304,7 +304,7 @@ async fn main() -> Result<(),DataStoreError> {
                             continue;
                         }
                     }
-                    info!("Closing all clients");
+                    info!("Closing all clients [{}]", clients.len());
 
                     for (_, client) in clients.iter_mut(){
                         client.abort();
@@ -357,7 +357,7 @@ async fn main() -> Result<(),DataStoreError> {
                 }
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
-                debug!("New client: {:?}", addr);
+                debug!("New client: {}", addr);
                 let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
                         Ok(python_script.clone_ref(py))
                 });
