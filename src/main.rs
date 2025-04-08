@@ -146,9 +146,12 @@ struct Args {
 
     #[arg(short='s', long, help="Python script should contain filter function.", default_value_t = String::from("script.py"))]
     filter_script: String,
+
+    #[arg(short='w', long, help="Allow write in current dir.", default_value_t = false)]
+    allow_write: bool,
 }
 
-fn restrict_thread(path: &PathBuf) -> Result<(), DataStoreError> {
+fn restrict_thread(path: &PathBuf, allow_write: bool) -> Result<(), DataStoreError> {
     let abi = ABI::V5;
 
     let status = Ruleset::default()
@@ -164,14 +167,24 @@ fn restrict_thread(path: &PathBuf) -> Result<(), DataStoreError> {
         RulesetStatus::NotEnforced => warn!("Network Not sandboxed! Please update your kernel."),
     }
 
-    let status = Ruleset::default()
+    let rules = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))?
         .create()?
         //can only execute python3 might might not be true on all linux flavors
         .add_rules(path_beneath_rules(&["/usr/bin/python3"], AccessFs::from_read(abi)))?
         .add_rules(path_beneath_rules(&["/usr/lib"], make_bitflags!(AccessFs::{ReadFile|ReadDir})))?
-        .add_rules(path_beneath_rules(path, make_bitflags!(AccessFs::ReadFile)))?
-        .restrict_self()?;
+        .add_rules(path_beneath_rules(path, make_bitflags!(AccessFs::ReadFile)))?;
+
+    let status = if allow_write{
+            info!("Allowing write access to current dir");
+            let path = std::env::current_dir()?;
+            rules.add_rules(path_beneath_rules(&[path], make_bitflags!(AccessFs::{ReadFile | RemoveFile | WriteFile | Truncate})))?
+                .restrict_self()?
+        }
+        else{
+            rules.restrict_self()?
+        };
+
     match status.ruleset {
         // The FullyEnforced case must be tested by the developer.
         RulesetStatus::FullyEnforced => info!("FS Fully sandboxed."),
@@ -204,7 +217,7 @@ async fn main() -> Result<(),DataStoreError> {
         bind
     };
 
-    restrict_thread(&PathBuf::from(&args.filter_script))?;
+    restrict_thread(&PathBuf::from(&args.filter_script), args.allow_write)?;
 
     info!("Starting UDP WAF listening on {}", args.bind);
 
