@@ -1,4 +1,4 @@
-use tokio::{net::UdpSocket, sync::mpsc, sync::mpsc::Sender, time, time::Duration, task::JoinHandle};
+use tokio::{net::UdpSocket, sync::mpsc, sync::mpsc::Sender, time, time::Duration, task::JoinHandle, signal::unix::{signal, SignalKind}};
 use std::{io, net::SocketAddr, sync::Arc};
 use std::collections::HashMap;
 use thiserror::Error;
@@ -11,6 +11,7 @@ use pyo3::types::PyByteArray;
 use std::ffi::CString;
 use clap::Parser;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use rlimit::{getrlimit, Resource};
 use landlock::{
     ABI, Access, AccessFs, Ruleset, RulesetAttr,
@@ -88,6 +89,12 @@ impl Client {
         }
         else{
             false
+        }
+    }
+
+    fn abort(&mut self) {
+        if let Some(handle) = self.client_handle.take() {
+            handle.abort();
         }
     }
 
@@ -177,7 +184,12 @@ fn restrict_thread(path: &PathBuf) -> Result<(), DataStoreError> {
 
 #[tokio::main]
 async fn main() -> Result<(),DataStoreError> {
-    Builder::new().filter_level(LevelFilter::Info).parse_default_env().init();
+    Builder::new()
+        .filter_level(LevelFilter::Info)
+        .parse_default_env()
+        .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
+        .init();
+
     let args = Args::parse();
     let server_addr = args.bind.parse::<SocketAddr>()?;
     let sock = UdpSocket::bind(server_addr).await?;
@@ -228,9 +240,22 @@ async fn main() -> Result<(),DataStoreError> {
         Ok(fun)
     });
 
-    let fun = fun?;
+    let mut python_script = fun?;
     let mut buf = [0; 1024];
     let mut last_cleanup = time::Instant::now();
+
+    let mut stream = signal(SignalKind::user_defined1())?;
+
+    let need_reload = Arc::new(AtomicBool::new(false));
+    let need_reload_clone = need_reload.clone();
+
+    tokio::spawn(async move {
+        loop{
+            stream.recv().await;
+            info!("Received SIGUSR1, reloading");
+            need_reload_clone.store(true, Ordering::Release);
+        }
+    });
 
     loop {
         let ret = time::timeout(Duration::from_secs(1),r.recv_from(&mut buf)).await;
@@ -248,12 +273,48 @@ async fn main() -> Result<(),DataStoreError> {
                     .collect();
 
                 for a in inactive_clients {
-                    warn!("Client {} is not active, removing", a);
+                    debug!("Client {} is not active, removing", a);
                     if let Some(mut c) = clients.remove(&a){
                         c.close().await?;
                     }
                 }
                 last_cleanup = time::Instant::now();
+
+                if need_reload.load(Ordering::Acquire){
+                    info!("Reloading python script");
+
+                    let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
+                        let code = std::fs::read_to_string(&args.filter_script)?;
+                        let fun = PyModule::from_code(
+                                py,
+                                CString::new(code)?.as_c_str(),
+                                CString::new(args.filter_script.as_bytes())?.as_c_str(),
+                                c_str!("filter"),
+                            )?.getattr("filter")?.into();
+
+                        Ok(fun)
+                    });
+                    match fun{
+                        Ok(fun) => {
+                            python_script = fun;
+                        }
+                        Err(e) => {
+                            error!("Error reloading python script: {}. Script not changed", e);
+                            need_reload.store(false, Ordering::Release);
+                            continue;
+                        }
+                    }
+                    info!("Closing all clients");
+
+                    for (_, client) in clients.iter_mut(){
+                        client.abort();
+                        client.close().await?;
+                    }
+                    clients.clear();
+
+                    need_reload.store(false, Ordering::Release);
+                    info!("Python script reloaded");
+                }
                 continue;
             }
         };
@@ -287,7 +348,7 @@ async fn main() -> Result<(),DataStoreError> {
                     client.close().await?;
 
                     let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
-                        Ok(fun.clone_ref(py))
+                        Ok(python_script.clone_ref(py))
                     });
                     let fun = fun?;
 
@@ -296,9 +357,9 @@ async fn main() -> Result<(),DataStoreError> {
                 }
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
-                info!("New client: {:?}", addr);
+                debug!("New client: {:?}", addr);
                 let fun: PyResult<Py<PyAny>> = Python::with_gil(|py| {
-                        Ok(fun.clone_ref(py))
+                        Ok(python_script.clone_ref(py))
                 });
                 let fun = fun?;
 
