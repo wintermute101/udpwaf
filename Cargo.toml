@@ -12,3 +12,6 @@ pyo3 = {version="0.24.1", features=["auto-initialize"]}
 rlimit = "0.10.2"
 thiserror = "2.0.12"
 tokio = { version = "1.44.2", features = ["rt-multi-thread", "net", "macros", "sync", "time", "signal"] }
+
+[profile.release]
+strip = true
