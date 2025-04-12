@@ -222,6 +222,10 @@ async fn main() -> Result<(),DataStoreError> {
         bind
     };
 
+    if local_bind.ip().is_loopback() && !forward_addr.ip().is_loopback(){
+        warn!("Local bind address is {local_bind} and forward is {forward_addr} forwarder probably wont be able to send to that address set local bind to 0.0.0.0:0 or [::]:0");
+    }
+
     restrict_thread(&PathBuf::from(&args.filter_script), args.allow_write, args.python_path)?;
 
     info!("Starting UDP WAF listening on {}", args.bind);
