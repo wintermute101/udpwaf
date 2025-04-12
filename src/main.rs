@@ -153,7 +153,7 @@ struct Args {
     //#[arg(short='s', long, default_value_t = String::from("/usr/bin/python3"))]
     //python_exec: String,
 
-    #[arg(short='s', long, default_value_t = String::from("/usr/lib"))]
+    #[arg(long, default_value_t = String::from("/usr/lib"))]
     python_path: String,
 }
 
