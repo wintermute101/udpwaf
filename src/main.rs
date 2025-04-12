@@ -149,9 +149,15 @@ struct Args {
 
     #[arg(short='w', long, help="Allow write in current dir.", default_value_t = false)]
     allow_write: bool,
+
+    //#[arg(short='s', long, default_value_t = String::from("/usr/bin/python3"))]
+    //python_exec: String,
+
+    #[arg(short='s', long, default_value_t = String::from("/usr/lib"))]
+    python_path: String,
 }
 
-fn restrict_thread(path: &PathBuf, allow_write: bool) -> Result<(), DataStoreError> {
+fn restrict_thread(path: &PathBuf, allow_write: bool, python_path: String) -> Result<(), DataStoreError> {
     let abi = ABI::V5;
 
     let status = Ruleset::default()
@@ -170,9 +176,8 @@ fn restrict_thread(path: &PathBuf, allow_write: bool) -> Result<(), DataStoreErr
     let rules = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))?
         .create()?
-        //can only execute python3 might might not be true on all linux flavors
-        .add_rules(path_beneath_rules(&["/usr/bin/python3"], AccessFs::from_read(abi)))?
-        .add_rules(path_beneath_rules(&["/usr/lib"], make_bitflags!(AccessFs::{ReadFile|ReadDir})))?
+        //.add_rules(path_beneath_rules(&[python_exec], AccessFs::from_read(abi)))?
+        .add_rules(path_beneath_rules(&[python_path], make_bitflags!(AccessFs::{ReadFile|ReadDir})))?
         .add_rules(path_beneath_rules(path, make_bitflags!(AccessFs::ReadFile)))?;
 
     let status = if allow_write{
@@ -217,7 +222,7 @@ async fn main() -> Result<(),DataStoreError> {
         bind
     };
 
-    restrict_thread(&PathBuf::from(&args.filter_script), args.allow_write)?;
+    restrict_thread(&PathBuf::from(&args.filter_script), args.allow_write, args.python_path)?;
 
     info!("Starting UDP WAF listening on {}", args.bind);
 
